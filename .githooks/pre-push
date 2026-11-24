@@ -1,0 +1,64 @@
+# =============================================================================
+# .githooks/pre-push —— 推送前重门禁（允许慢）
+# 内容：① 后端单测（mvn -B test，H2 内存库）② 前端构建（npm run build）
+#
+# 工具链解析顺序：MVN_BIN / JAVA_HOME 环境变量 → PATH → macOS java_home。
+# 缺失时打印警告后放行，不锁死仓库。
+# =============================================================================
+
+root=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$root" ]; then
+  root=$(pwd)
+fi
+cd "$root" || exit 1
+
+MVN_CMD=""
+if [ -n "$MVN_BIN" ] && [ -f "$MVN_BIN" ]; then
+  MVN_CMD="$MVN_BIN"
+elif command -v mvn >/dev/null 2>&1; then
+  MVN_CMD="mvn"
+fi
+
+# 建议锁定 JDK 17：更高版本 JDK 可能让 Lombok 注解处理失效，编译报「找不到符号」。
+if [ -z "$JAVA_HOME" ] && [ -x /usr/libexec/java_home ]; then
+  _jh=$(/usr/libexec/java_home -v 17 2>/dev/null)
+  if [ -n "$_jh" ]; then
+    JAVA_HOME="$_jh"
+    export JAVA_HOME
+  fi
+fi
+
+if [ -z "$MVN_CMD" ]; then
+  echo "[pre-push] 未找到 mvn，跳过后端单测"
+else
+  echo "[pre-push] 1/2 后端单测（mvn -B test）..."
+  if ! (cd backend && "$MVN_CMD" -B test); then
+    echo "[pre-push] 失败：后端单测未通过，本次推送被拒绝"
+    exit 1
+  fi
+  echo "[pre-push] 后端单测 OK"
+fi
+
+if [ ! -d frontend/node_modules ]; then
+  echo "[pre-push] frontend/node_modules 缺失，跳过前端构建（先 npm ci）"
+elif ! command -v npm >/dev/null 2>&1; then
+  echo "[pre-push] 未找到 npm，跳过前端构建"
+else
+  # esbuild 会往系统临时目录写中转文件；部分受限环境会因无权限删除而构建失败。
+  # 把 TMP/TEMP 指向工作区内目录可绕开该问题。
+  esbuild_tmp="$root/frontend/node_modules/.esbuild-tmp"
+  mkdir -p "$esbuild_tmp" 2>/dev/null
+  TMP="$esbuild_tmp"
+  TEMP="$esbuild_tmp"
+  export TMP TEMP
+
+  echo "[pre-push] 2/2 前端构建（npm run build）..."
+  if ! (cd frontend && npm run build); then
+    echo "[pre-push] 失败：前端构建未通过，本次推送被拒绝"
+    exit 1
+  fi
+  echo "[pre-push] 前端构建 OK"
+fi
+
+echo "[pre-push] 全部门禁通过"
+exit 0

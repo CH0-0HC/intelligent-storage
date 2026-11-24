@@ -1,0 +1,49 @@
+# =============================================================================
+# .githooks/pre-commit —— 快速门禁（目标 < 60s）
+# 内容：① i18n 键完整性 ② 前端单测（vitest）
+# 工具链缺失时打印警告后放行，不锁死仓库。
+# 安装：node scripts/install-git-hooks.mjs
+# =============================================================================
+
+root=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$root" ]; then
+  root=$(pwd)
+fi
+cd "$root" || exit 1
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "[pre-commit] 未找到 node，跳过全部门禁（放行本次提交）"
+  exit 0
+fi
+
+echo "[pre-commit] 1/2 i18n 键完整性检查 ..."
+if ! i18n_out=$(node scripts/check-i18n-keys.mjs 2>&1); then
+  printf '%s\n' "$i18n_out"
+  echo "[pre-commit] 失败：check-i18n-keys.mjs 执行异常"
+  exit 1
+fi
+missing_lines=$(printf '%s\n' "$i18n_out" | grep '^MISSING ')
+if [ -n "$missing_lines" ]; then
+  printf '%s\n' "$missing_lines"
+  echo "[pre-commit] 失败：i18n 存在缺失键，请在 frontend/src/i18n/locales 下补齐"
+  exit 1
+fi
+echo "[pre-commit] i18n OK"
+
+if [ -d frontend/node_modules ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "[pre-commit] 未找到 npm，跳过前端单测"
+  else
+    echo "[pre-commit] 2/2 前端单测（vitest）..."
+    if ! (cd frontend && npm test); then
+      echo "[pre-commit] 失败：前端单测未通过，本次提交被拒绝"
+      exit 1
+    fi
+    echo "[pre-commit] 前端单测 OK"
+  fi
+else
+  echo "[pre-commit] 跳过前端单测：node_modules 缺失（先 cd frontend && npm ci）"
+fi
+
+echo "[pre-commit] 全部门禁通过"
+exit 0

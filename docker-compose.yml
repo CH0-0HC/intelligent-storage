@@ -1,0 +1,86 @@
+# 一键启动完整栈：MySQL + Redis + 后端 + 前端
+#   cp .env.example .env && docker compose up -d --build
+#   前端 http://localhost:8088 ，后端 http://localhost:8080/api
+# 数据库首次启动会自动执行 backend/src/main/resources/db/init.sql（含演示账号与示例商品）
+
+name: intelligent-storage
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: is-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-in-production}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-smart_inventory}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./backend/src/main/resources/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: is-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: is-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-smart_inventory}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      DB_USERNAME: ${DB_USERNAME:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me-in-production}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DATABASE: ${REDIS_DATABASE:-0}
+      UPLOAD_PATH: ${UPLOAD_PATH:-/data/uploads}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8088}
+      AI_PROVIDER: ${AI_PROVIDER:-auto}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b}
+      ALIYUN_API_KEY: ${ALIYUN_API_KEY:-}
+      ALIYUN_API_SECRET: ${ALIYUN_API_SECRET:-}
+      TZ: Asia/Shanghai
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - uploads-data:/data/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: is-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-8088}:80"
+
+volumes:
+  mysql-data:
+  uploads-data:

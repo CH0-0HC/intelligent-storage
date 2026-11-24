@@ -1,0 +1,32 @@
+# 统一行尾处理（【M-7 修复】）
+#
+# 背景：本仓库此前无 .gitattributes，且未设置 core.autocrlf。在 Windows 与
+# Linux/沙箱之间切换时，同一批文件会被读成 CRLF / LF 两种行尾，`git status`
+# 因此在工作区报出数十个「已修改」文件（实测 58 个），逐行等量增删、内容其实
+# 完全没变 —— 真实改动被噪声淹没，清理时还极易误伤未入库的新文件。
+#
+# 约定：文本文件入库一律归一为 LF；平台差异交给 Git 处理。
+* text=auto eol=lf
+
+# Windows 脚本必须保持 CRLF，否则 cmd/PowerShell 可能解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.bmp binary
+*.jar binary
+*.bundle binary
+*.zip binary
+*.xlsx binary
+*.docx binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
