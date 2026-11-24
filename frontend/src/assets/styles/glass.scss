@@ -1,0 +1,901 @@
+/**
+ * ============================================================================
+ *  Liquid Glass —— 毛玻璃（磨砂玻璃）视觉层 / 可实时调节调色板
+ * ============================================================================
+ *
+ * 设计目标：参考 iOS 26「Liquid Glass」质感 —— 通透、细腻高光、顺滑过渡。
+ *
+ * 【核心机制：为什么用「数值型」CSS 变量 + calc()】
+ * 滑块要实时改模糊半径 / 背景透明度。若把整个 blur() 表达式交给 JS 拼字符串，
+ * 每次 input 事件都要重新解析一长串声明；这里改为**只写数值**：
+ *
+ *      JS:  root.style.setProperty('--glass-alpha', 0.52)     // 一个数字
+ *      CSS: --glass-bg: rgb(var(--glass-tint-rgb) / calc(<系数> * var(--glass-alpha)))
+ *
+ * 于是「1 个旋钮 → 多个派生值」全部由 CSS 引擎用 calc() 求值，JS 每帧只写几个
+ * 纯数字，不触发 Vue 重渲染、不重建样式表，拖动时才不会卡顿。
+ *
+ * 【滑块可调项】
+ *   --glass-alpha  0~1   背景不透明度总旋钮（值越大越不透明、越"实"）
+ *   --glass-blur   0~40  模糊半径（px），实际值 = 基准 × --glass-blur-scale
+ *   --glass-sat    100~220% 背景饱和度提升（增强通透感）
+ *
+ * 【可读性护栏：--glass-frost】
+ * 背景越透明（alpha 越小），卡片就越"透"到背后的内容上，正文对比度会掉。
+ * 因此引入 frost（白/黑提亮层），它与 alpha **反向**联动：
+ * alpha 越小 → frost 越强，保证文字始终压得住背景。
+ * 用户把透明度拉到底也不会出现"字看不清"。
+ * ============================================================================
+ */
+
+:root {
+  /* ---- 底色调：浅色主题用白玻璃，深色主题用深色玻璃 ---- */
+  --glass-tint-rgb: 255 255 255;
+  --glass-tint-strong-rgb: 255 255 255;
+  --glass-tint-border-rgb: 255 255 255;
+
+  /* ---- 滑块控制的三个旋钮（JS 会在 :root 上覆写） ---- */
+  --glass-alpha: 0.5;      /* 背景不透明度 0~1 */
+  --glass-blur: 18;        /* 模糊半径基准值，单位 px */
+  --glass-sat: 160;        /* 背景饱和度 % */
+
+  /* ---- 可读性护栏：随 alpha 反向联动，由 JS 计算后写入 ---- */
+  --glass-frost: 0.1;
+
+  /* ---- 响应式模糊缩放：小屏降低模糊半径，省 GPU 且避免"糊成一片" ---- */
+  --glass-blur-scale: 1;
+
+  /* ---- 派生：各层实际不透明度（统一由 --glass-alpha 驱动）---- */
+  --glass-alpha-veil: calc(0.14 * var(--glass-alpha));   /* 最薄：内嵌区块 */
+  --glass-alpha-light: calc(0.5 * var(--glass-alpha));   /* 薄：输入框/次级面 */
+  --glass-alpha-base: var(--glass-alpha);                /* 标准卡片 */
+  --glass-alpha-solid: calc(1.26 * var(--glass-alpha));  /* 厚：顶栏/侧栏 */
+  --glass-alpha-strong: calc(1.5 * var(--glass-alpha));  /* 最厚：弹窗 */
+
+  /* ---- 兼容层：保留项目既有的 --glass-bg-* 变量名，
+   *      但把它们接到实时 alpha 上，这样各处既有的 `var(--glass-bg)`
+   *      会自动跟随滑块，无需逐文件改。 ---- */
+  --glass-bg: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base));
+  --glass-bg-light: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light));
+  --glass-bg-dark: rgb(var(--glass-tint-rgb) / var(--glass-alpha-veil));
+  --glass-bg-solid: rgb(var(--glass-tint-strong-rgb) / var(--glass-alpha-solid));
+  --glass-bg-strong: rgb(var(--glass-tint-strong-rgb) / var(--glass-alpha-strong));
+
+  /* ---- 边框：比背景略"黏"一点，alpha 很低时自动加厚，避免玻璃失去轮廓 ---- */
+  --glass-border-a: calc(var(--glass-alpha) * 1.15 + 0.08);
+  --glass-border-a-light: calc(var(--glass-alpha) * 0.85 + 0.05);
+  --glass-border-a-thick: calc(var(--glass-alpha) * 1.3 + 0.12);
+
+  --glass-border: rgb(var(--glass-tint-border-rgb) / var(--glass-border-a));
+  --glass-border-light: rgb(var(--glass-tint-border-rgb) / var(--glass-border-a-light));
+  --glass-border-thick: rgb(var(--glass-tint-border-rgb) / var(--glass-border-a-thick));
+
+  /* ---- 高光：alpha 越低，镜面高光越明显（液态玻璃的"液面"感） ---- */
+  --glass-sheen-a: calc((1 - var(--glass-alpha)) * 0.55 + 0.12);
+  --glass-highlight: rgb(255 255 255 / var(--glass-sheen-a));
+  --glass-highlight-soft: rgb(255 255 255 / calc(var(--glass-sheen-a) * 0.55));
+  --glass-highlight-strong: rgb(255 255 255 / calc(var(--glass-sheen-a) * 1.3));
+
+  /* ---- 高光渐变：顶部一道细亮线 + 中部斜向扫光，模拟玻璃边缘折射 ---- */
+  --glass-sheen-gradient:
+    radial-gradient(120% 100% at 0% 0%, rgb(255 255 255 / calc(var(--glass-sheen-a) * 0.5)) 0%, transparent 55%),
+    linear-gradient(180deg, rgb(255 255 255 / calc(var(--glass-sheen-a) * 0.6)) 0%, transparent 26%);
+
+  /* ---- 阴影：越透明越需要阴影把卡片"抬"起来，否则会糊在一起 ---- */
+  --glass-shadow-strength: calc(0.5 + (1 - var(--glass-alpha)) * 0.5);
+  --glass-shadow-rgb: 31 38 135;
+  --glass-shadow: rgb(var(--glass-shadow-rgb) / calc(0.1 * var(--glass-shadow-strength)));
+  --glass-shadow-light: rgb(var(--glass-shadow-rgb) / calc(0.05 * var(--glass-shadow-strength)));
+  --glass-shadow-hover: rgb(var(--glass-shadow-rgb) / calc(0.2 * var(--glass-shadow-strength)));
+  --glass-shadow-strong: rgb(var(--glass-shadow-rgb) / calc(0.28 * var(--glass-shadow-strength)));
+
+  /* ---- 交互：悬停位移量（触摸设备置 0，避免"悬浮"在触屏上显得怪） ---- */
+  --glass-hover-lift: translateY(-2px);
+  --glass-hover-lift-card: translateY(-4px);
+
+  /* ---- 控件面板（外观调节面板等浮层）----
+   * 它必须比普通卡片"实"得多：面板里全是小字号标签与数值，
+   * 若跟着卡片一起变透明，背后的正文经模糊后会以"鬼影"形式透上来，
+   * 虽然还能看清字，但会显得脏、失去 iOS 液态玻璃的干净感。
+   * 越透明时越依赖自身底色（单调递减），保证任何设置下都可读。 */
+  --glass-panel-alpha: calc(0.92 + (1 - var(--glass-alpha)) * 0.06);
+
+  /* ---- 顺滑过渡曲线（iOS 风格缓动）---- */
+  --glass-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --glass-dur: 0.32s;
+}
+
+.dark {
+  --glass-tint-rgb: 32 32 54;
+  --glass-tint-strong-rgb: 38 38 64;
+  --glass-tint-border-rgb: 150 150 205;
+
+  /* 深色下"提亮层"改为极淡的白，用于勾出玻璃边缘 */
+  --glass-frost: 0.06;
+
+  --glass-shadow-rgb: 0 0 0;
+  --glass-shadow-strength: calc(0.6 + (1 - var(--glass-alpha)) * 0.4);
+  --glass-shadow: rgb(0 0 0 / calc(0.28 * var(--glass-shadow-strength)));
+  --glass-shadow-light: rgb(0 0 0 / calc(0.18 * var(--glass-shadow-strength)));
+  --glass-shadow-hover: rgb(0 0 0 / calc(0.42 * var(--glass-shadow-strength)));
+  --glass-shadow-strong: rgb(0 0 0 / calc(0.55 * var(--glass-shadow-strength)));
+
+  /* 深色玻璃的高光收得更含蓄，否则会出现刺眼白边 */
+  --glass-sheen-a: calc((1 - var(--glass-alpha)) * 0.3 + 0.06);
+}
+
+/* ==========================================================================
+ *  1. 基础玻璃面（surface）
+ *     统一承担：背景色 + 模糊 + 饱和度 + 边框 + 高光 + 阴影
+ * ========================================================================== */
+
+.glass-surface,
+.glass,
+.glass-card,
+.glass-solid,
+.glass-strong,
+.glass-light {
+  position: relative;
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base));
+  /* 护栏提亮层叠在底色之上，alpha 越低越强，保证正文可读 */
+  background-image:
+    var(--glass-sheen-gradient),
+    linear-gradient(rgb(var(--glass-tint-rgb) / var(--glass-frost)), rgb(var(--glass-tint-rgb) / var(--glass-frost)));
+  backdrop-filter: blur(calc(var(--glass-blur) * 1px * var(--glass-blur-scale))) saturate(calc(var(--glass-sat) * 1%));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1px * var(--glass-blur-scale))) saturate(calc(var(--glass-sat) * 1%));
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    0 8px 32px var(--glass-shadow),
+    inset 0 1px 0 var(--glass-highlight-soft);
+  /* 让玻璃边缘的高光与圆角过渡顺滑 */
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease),
+    transform var(--glass-dur) var(--glass-ease);
+}
+
+/* 各"厚度"档位：只改背景不透明度与圆角，模糊保持一致 */
+.glass {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base));
+}
+
+.glass-light {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light));
+  box-shadow:
+    0 4px 16px var(--glass-shadow-light),
+    inset 0 1px 0 var(--glass-highlight-soft);
+}
+
+.glass-solid {
+  background-color: rgb(var(--glass-tint-strong-rgb) / var(--glass-alpha-solid));
+  box-shadow:
+    0 12px 40px var(--glass-shadow),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+.glass-strong {
+  background-color: rgb(var(--glass-tint-strong-rgb) / var(--glass-alpha-strong));
+  box-shadow:
+    0 16px 48px var(--glass-shadow-strong),
+    inset 0 1px 0 var(--glass-highlight-strong);
+}
+
+.glass-card {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base));
+  border-radius: var(--glass-radius-lg);
+  box-shadow:
+    0 8px 32px var(--glass-shadow),
+    inset 0 1px 0 var(--glass-highlight-soft);
+}
+
+/* 圆角档位 */
+.glass-sm { border-radius: var(--glass-radius-sm); }
+.glass-md { border-radius: var(--glass-radius-md); }
+.glass-lg { border-radius: var(--glass-radius-lg); }
+.glass-xl { border-radius: var(--glass-radius-xl); }
+
+/* ==========================================================================
+ *  1b. SCSS 混入（mixin）
+ *
+ *  为什么需要它：模糊表达式只应出现在**一处**。若各组件各写一遍
+ *  `backdrop-filter: blur(24px)`，滑块（--glass-blur）就管不到它们，
+ *  而且响应式缩放（--glass-blur-scale）也会失效。
+ *  统一走 mixin 后，所有"玻璃面"都只由 CSS 变量驱动。
+ * ========================================================================== */
+
+/// 基础模糊：不带背景色，只负责 backdrop-filter 与高光层
+@mixin glass-blur {
+  backdrop-filter: blur(calc(var(--glass-blur) * 1px * var(--glass-blur-scale))) saturate(calc(var(--glass-sat) * 1%));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1px * var(--glass-blur-scale))) saturate(calc(var(--glass-sat) * 1%));
+  background-image: var(--glass-sheen-gradient);
+}
+
+/// 外壳玻璃面：导航栏 / 侧边栏 / 主内容区这类"整块"容器。
+/// $alpha-var 指定背景不透明度档位，默认用标准档。
+@mixin glass-shell($alpha-var: --glass-alpha-solid) {
+  background-color: rgb(var(--glass-tint-strong-rgb) / var($alpha-var));
+  @include glass-blur;
+}
+
+/// 弹层玻璃面：对话框 / 抽屉 / 消息框
+@mixin glass-overlay {
+  background-color: rgb(var(--glass-tint-strong-rgb) / var(--glass-alpha-strong));
+  @include glass-blur;
+  border: 1px solid var(--glass-border-thick);
+  box-shadow:
+    0 16px 48px var(--glass-shadow-strong),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+/// 轻量玻璃面：数量多、或位于滚动区内的卡片。
+/// 刻意**不加** backdrop-filter —— 嵌套 backdrop-filter 是本项目最贵的写法，
+/// 用底色 + 高光边框即可与真玻璃面观感一致。
+@mixin glass-tint-only($alpha-var: --glass-alpha-base) {
+  background-color: rgb(var(--glass-tint-rgb) / var($alpha-var));
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    0 6px 24px var(--glass-shadow),
+    inset 0 1px 0 var(--glass-highlight-soft);
+  background-image: var(--glass-sheen-gradient);
+}
+
+/* ==========================================================================
+ *  2. 交互玻璃（悬停 / 按下 / 聚焦）
+ * ========================================================================== */
+.glass-interactive {
+  cursor: pointer;
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease),
+    transform var(--glass-dur) var(--glass-ease);
+}
+
+.glass-interactive:hover,
+.glass-hover:hover,
+.glass-card:hover {
+  transform: var(--glass-hover-lift-card);
+  background-color: rgb(var(--glass-tint-strong-rgb) / calc(var(--glass-alpha-base) * 1.25));
+  border-color: var(--glass-border-thick);
+  box-shadow:
+    0 16px 48px var(--glass-shadow-hover),
+    inset 0 1px 0 var(--glass-highlight);
+}
+
+.glass-interactive:active,
+.glass-hover:active,
+.glass-card:active {
+  transform: translateY(-1px) scale(0.995);
+  transition-duration: 0.12s;
+}
+
+.glass-transition {
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease),
+    transform var(--glass-dur) var(--glass-ease);
+}
+
+/* 拖动滑块期间：加 will-change 让浏览器提前把该层提升为合成层，
+ * 避免每帧重新决定是否走 GPU 合成而掉帧；松手后由 JS 移除，防止长期占用显存。 */
+.glass-dragging .glass-surface,
+.glass-dragging .glass,
+.glass-dragging .glass-card,
+.glass-dragging .sidebar,
+.glass-dragging .header,
+.glass-dragging .main-content,
+.glass-dragging .el-dialog,
+.glass-dragging .el-message-box {
+  will-change: backdrop-filter;
+}
+
+/* 拖动中取消过渡：滑块是"实时"的，若还走 0.32s 过渡会明显跟不上手指 */
+.glass-dragging .glass-surface,
+.glass-dragging .glass,
+.glass-dragging .glass-card,
+.glass-dragging .sidebar,
+.glass-dragging .header,
+.glass-dragging .main-content,
+.glass-dragging .el-dialog,
+.glass-dragging .el-message-box,
+.glass-dragging .appearance-panel {
+  transition: none !important;
+}
+
+/* ==========================================================================
+ *  3. 控件毛玻璃（按钮 / 输入 / 下拉 / 分页等）
+ *     注意：这些元素数量多、且常出现在滚动区内，一律**不再叠加**
+ *     backdrop-filter（嵌套 backdrop-filter 是本项目最容易掉帧的写法），
+ *     只用半透明底 + 高光边框，视觉上与玻璃面一致但几乎零成本。
+ * ========================================================================== */
+
+.glass-control {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light));
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease);
+}
+
+.glass-control:hover {
+  background-color: rgb(var(--glass-tint-strong-rgb) / calc(var(--glass-alpha-light) * 1.6));
+  border-color: var(--glass-border-thick);
+}
+
+/* ==========================================================================
+ *  5. 页面背衬（毛玻璃要有"东西可糊"）
+ *
+ *  纯色背景上的毛玻璃是看不出效果的。这里在 body 上铺一层柔和的多色光斑，
+ *  玻璃面才有可折射的内容，"通透感"才成立。
+ *  用 position:fixed + z-index:-1 挂在所有内容之下，不参与任何交互。
+ * ========================================================================== */
+
+body {
+  background-color: var(--bg-primary);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--bg-primary);
+  background-image:
+    radial-gradient(48% 42% at 12% 8%, rgba(120, 180, 255, 0.55) 0%, transparent 62%),
+    radial-gradient(42% 38% at 88% 6%, rgba(255, 160, 200, 0.48) 0%, transparent 60%),
+    radial-gradient(52% 46% at 78% 88%, rgba(150, 130, 255, 0.42) 0%, transparent 64%),
+    radial-gradient(46% 40% at 18% 92%, rgba(120, 230, 220, 0.42) 0%, transparent 62%),
+    var(--gradient-bg);
+}
+
+.dark body::before {
+  background-image:
+    radial-gradient(48% 42% at 12% 8%, rgba(70, 110, 220, 0.42) 0%, transparent 62%),
+    radial-gradient(42% 38% at 88% 6%, rgba(190, 80, 150, 0.32) 0%, transparent 60%),
+    radial-gradient(52% 46% at 78% 88%, rgba(110, 80, 220, 0.38) 0%, transparent 64%),
+    radial-gradient(46% 40% at 18% 92%, rgba(40, 150, 170, 0.32) 0%, transparent 62%),
+    var(--gradient-bg);
+}
+
+/* 顶栏与侧栏之间也要透出背衬，因此把外壳的实心底色改掉 */
+.layout-container {
+  background: transparent !important;
+}
+
+.dark .layout-container {
+  background-color: transparent !important;
+}
+
+/* 页面主容器：原为不透明底色，改为透出背衬 */
+.page-container,
+.el-main,
+.main-content,
+.dark .page-container,
+.dark .el-main,
+.dark .main-content {
+  background-color: transparent !important;
+}
+
+/* ==========================================================================
+ *  6. Element Plus 组件毛玻璃覆盖
+ *
+ *  必须引入 glass.scss（在 theme.scss 之后）才能生效：
+ *  theme.scss 用 `var(--bg-card) !important` 把所有组件背景写成了不透明色，
+ *  这里逐类改回半透明玻璃底。选择器刻意与 theme.scss 保持同级或更高，
+ *  避免出现"某些组件改了、某些没改"的半吊子状态。
+ * ========================================================================== */
+
+/* ---- 6.1 卡片：主体玻璃 + 斜向高光 ---- */
+.el-card,
+.dark .el-card {
+  /* 加 !important 与 theme.scss 的写法保持一致：
+     theme.scss 用 `background-color: var(--bg-card) !important` 统一压制了组件默认底色，
+     这里若不加，任一更高优先级的默认规则都会把玻璃底顶掉。 */
+  @include glass-tint-only(--glass-alpha-base);
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base)) !important;
+  border-color: var(--glass-border) !important;
+  border-radius: var(--glass-radius-lg);
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease),
+    transform var(--glass-dur) var(--glass-ease);
+}
+
+.el-card__header,
+.el-card__body,
+.el-card__footer,
+.dark .el-card__header,
+.dark .el-card__body,
+.dark .el-card__footer {
+  background: transparent !important;
+}
+
+.el-card__header,
+.dark .el-card__header {
+  border-bottom-color: var(--glass-border-light) !important;
+}
+
+.el-card__footer,
+.dark .el-card__footer {
+  border-top-color: var(--glass-border-light) !important;
+}
+
+/* ---- 6.2 表格：整表透出玻璃底，行不再各自叠色（避免层层叠加越叠越实） ---- */
+.el-table,
+.el-table__header-wrapper,
+.el-table__header tr,
+.el-table__header th,
+.el-table__body,
+.el-table__body tr,
+.el-table__body-wrapper,
+.el-table__footer-wrapper,
+.el-table tr,
+.el-table th.el-table__cell,
+.el-table td.el-table__cell,
+.dark .el-table,
+.dark .el-table__header-wrapper,
+.dark .el-table__header tr,
+.dark .el-table__header th,
+.dark .el-table__body tr,
+.dark .el-table__body td {
+  background-color: transparent !important;
+}
+
+.el-table th.el-table__cell,
+.dark .el-table__header th {
+  color: var(--text-secondary) !important;
+  border-bottom-color: var(--glass-border) !important;
+}
+
+.el-table td.el-table__cell,
+.dark .el-table__body td {
+  border-bottom-color: var(--glass-border-light) !important;
+}
+
+/* 斑马纹：极淡的一层，只为区分行，不破坏通透 */
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell,
+.el-table--striped .el-table__body tr.el-table__row--striped td,
+.dark .el-table--striped .el-table__body tr.el-table__row--striped td {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-veil)) !important;
+}
+
+.el-table__body tr:hover > td.el-table__cell,
+.el-table__body tr:hover > td,
+.dark .el-table__body tr:hover > td {
+  background-color: var(--accent-light) !important;
+}
+
+.el-table--border,
+.el-table--border th,
+.el-table--border td,
+.el-table--border .el-table__cell {
+  border-color: var(--glass-border-light) !important;
+}
+
+/* ---- 6.2b 固定列（fixed="right"）必须保持不透明 ----
+ * 固定列是"浮"在其余列之上的，一旦透明，横向滚动时下面的单元格会直接透出来。
+ * 这里给它一档更实的玻璃底，既遮住下层，又与整体玻璃观感一致。 */
+.el-table .el-table__cell.is-fixed,
+.el-table .el-table-fixed-column--left,
+.el-table .el-table-fixed-column--right {
+  background-color: rgb(var(--glass-tint-strong-rgb) / calc(var(--glass-alpha) * 1.34 + 0.08)) !important;
+}
+
+.el-table__header-wrapper .el-table__cell.is-fixed,
+.el-table__header-wrapper .el-table-fixed-column--left,
+.el-table__header-wrapper .el-table-fixed-column--right {
+  background-color: rgb(var(--glass-tint-strong-rgb) / calc(var(--glass-alpha) * 1.34 + 0.12)) !important;
+}
+
+.el-table__body tr:hover > td.el-table__cell.is-fixed,
+.el-table__body tr:hover > td.el-table-fixed-column--right {
+  /* 悬停行高亮也要覆盖固定列，否则悬停时固定列与其余列颜色不一致 */
+  background-color: var(--accent-light) !important;
+}
+
+/* ---- 6.3 输入类控件：薄玻璃，不加 blur（数量多，避免叠加开销） ---- */
+.el-input__inner,
+.el-textarea__inner,
+.el-input-group__append,
+.el-input-group__prepend,
+.dark .el-input__inner,
+.dark .el-textarea__inner {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  border-color: var(--glass-border) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder,
+.dark .el-input__inner::placeholder {
+  color: var(--text-muted) !important;
+}
+
+.el-select .el-input__inner,
+.el-date-editor .el-input__inner,
+.el-cascader .el-input__inner,
+.dark .el-select .el-input__inner,
+.dark .el-date-editor .el-input__inner {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  border-color: var(--glass-border) !important;
+}
+
+.el-select__wrapper,
+.el-select__wrapper.is-focused {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  box-shadow: none !important;
+}
+
+/* ---- 6.4 按钮 ---- */
+.el-button,
+.dark .el-button {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  border-color: var(--glass-border) !important;
+  color: var(--text-secondary) !important;
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease);
+}
+
+.el-button:hover,
+.dark .el-button:hover {
+  background-color: var(--accent-hover) !important;
+  border-color: var(--accent-color) !important;
+  color: var(--accent-color) !important;
+}
+
+/* 主按钮保持实心：它是页面上的主要行动点，玻璃化反而会削弱可点击感 */
+.el-button--primary,
+.el-button--primary:hover,
+.dark .el-button--primary,
+.dark .el-button--primary:hover {
+  background-color: var(--accent-color) !important;
+  border-color: var(--accent-color) !important;
+  color: #fff !important;
+}
+
+.el-button--danger,
+.el-button--danger:hover {
+  background-color: var(--el-color-danger, #f56c6c) !important;
+  border-color: var(--el-color-danger, #f56c6c) !important;
+  color: #fff !important;
+}
+
+/* ---- 6.5 弹层：对话框 / 消息框 / 下拉 / 选择器 ----
+ * 这里不再叠加 backdrop-filter：弹层自带 open/close 动画，
+ * 动画 + backdrop-filter 会强制每帧重新采样背景，是"打开弹窗卡一下"的典型成因。
+ * 改用较实的玻璃底 + 高光边框，观感接近而开销低得多。
+ */
+.el-dialog,
+.dark .el-dialog,
+.el-message-box,
+.dark .el-message-box {
+  background-color: rgb(var(--glass-tint-strong-rgb) / calc(var(--glass-alpha) * 1.42 + 0.06)) !important;
+  background-image: var(--glass-sheen-gradient);
+  border: 1px solid var(--glass-border-thick) !important;
+  border-radius: var(--glass-radius-xl) !important;
+  box-shadow:
+    0 20px 60px var(--glass-shadow-strong),
+    inset 0 1px 0 var(--glass-highlight) !important;
+}
+
+.el-dialog__header,
+.el-dialog__body,
+.el-dialog__footer,
+.el-message-box__header,
+.el-message-box__content,
+.dark .el-dialog__header,
+.dark .el-dialog__body {
+  background: transparent !important;
+  color: var(--text-primary) !important;
+}
+
+.el-dialog__title,
+.dark .el-dialog__title,
+.el-message-box__title,
+.dark .el-message-box__title {
+  color: var(--text-primary) !important;
+}
+
+/* 遮罩：轻微模糊，衬托弹窗的"玻璃浮起"感 */
+.el-overlay {
+  background-color: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+}
+
+.dark .el-overlay {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* 下拉/气泡类：只做玻璃底色，不加 blur */
+.el-select-dropdown,
+.el-dropdown-menu,
+.el-picker-panel,
+.el-cascader__dropdown,
+.el-cascader-menu,
+.el-popper.is-light,
+.dark .el-select-dropdown,
+.dark .el-dropdown-menu,
+.dark .el-cascader-menu {
+  background-color: rgb(var(--glass-tint-strong-rgb) / calc(var(--glass-alpha) * 1.36 + 0.06)) !important;
+  border-color: var(--glass-border) !important;
+  box-shadow:
+    0 12px 36px var(--glass-shadow),
+    inset 0 1px 0 var(--glass-highlight-soft) !important;
+}
+
+.el-select-dropdown__item,
+.el-dropdown-menu__item,
+.el-option,
+.dark .el-select-dropdown__item,
+.dark .el-dropdown-menu__item {
+  background-color: transparent !important;
+  color: var(--text-secondary) !important;
+}
+
+.el-select-dropdown__item:hover,
+.el-dropdown-menu__item:hover,
+.el-option:hover,
+.dark .el-select-dropdown__item:hover,
+.dark .el-dropdown-menu__item:hover {
+  background-color: var(--accent-light) !important;
+  color: var(--accent-color) !important;
+}
+
+.el-select-dropdown__item.selected,
+.el-select-dropdown__item.is-selected,
+.dark .el-select-dropdown__item.selected {
+  background-color: var(--accent-light) !important;
+  color: var(--accent-color) !important;
+}
+
+/* ---- 6.6 其余小控件：统一为薄玻璃底 ---- */
+.el-tag,
+.dark .el-tag {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  border-color: var(--glass-border) !important;
+  color: var(--text-secondary) !important;
+}
+
+.el-pagination button,
+.el-pagination.is-background .el-pager li {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  border: 1px solid var(--glass-border) !important;
+  color: var(--text-secondary) !important;
+}
+
+.el-pagination.is-background .el-pager li.is-active {
+  background-color: var(--accent-color) !important;
+  border-color: var(--accent-color) !important;
+  color: #fff !important;
+}
+
+.el-calendar,
+.el-calendar-table,
+.dark .el-calendar {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-light)) !important;
+  border-color: var(--glass-border) !important;
+}
+
+.el-upload,
+.el-upload-dragger,
+.dark .el-upload {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-veil)) !important;
+  border-color: var(--glass-border) !important;
+}
+
+.el-breadcrumb__inner,
+.el-breadcrumb__item a,
+.dark .el-breadcrumb__item a {
+  color: var(--text-muted) !important;
+}
+
+.el-breadcrumb__item:last-child .el-breadcrumb__inner,
+.dark .el-breadcrumb__item:last-child .el-breadcrumb__inner {
+  color: var(--text-primary) !important;
+}
+
+.el-scrollbar__wrap,
+.dark .el-scrollbar__wrap {
+  background: transparent !important;
+}
+
+/* 侧边菜单：透明底交给外层 sidebar 玻璃承担，这里只修菜单项配色 */
+.el-menu,
+.dark .el-menu {
+  background-color: transparent !important;
+  border-right: none !important;
+}
+
+.el-menu-item,
+.dark .el-menu-item {
+  background-color: transparent !important;
+}
+
+.el-menu-item:hover,
+.dark .el-menu-item:hover {
+  background-color: var(--accent-light) !important;
+}
+
+.el-menu-item.is-active,
+.dark .el-menu-item.is-active {
+  background-color: var(--accent-light) !important;
+  color: var(--accent-color) !important;
+}
+
+/* ==========================================================================
+ *  7. 项目自定义卡片类（views 里以 scoped 样式定义，这里统一接管底色）
+ * ========================================================================== */
+
+.stat-card,
+.order-card,
+.cart-item,
+.coupon-card,
+.product-card,
+.section-card,
+.chart-card {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base)) !important;
+  background-image: var(--glass-sheen-gradient);
+  border: 1px solid var(--glass-border) !important;
+  box-shadow:
+    0 8px 32px var(--glass-shadow),
+    inset 0 1px 0 var(--glass-highlight-soft) !important;
+  transition:
+    background-color var(--glass-dur) var(--glass-ease),
+    border-color var(--glass-dur) var(--glass-ease),
+    box-shadow var(--glass-dur) var(--glass-ease),
+    transform var(--glass-dur) var(--glass-ease);
+}
+
+.order-card:hover,
+.coupon-card:hover,
+.section-card:hover {
+  transform: var(--glass-hover-lift);
+  border-color: var(--glass-border-thick) !important;
+  box-shadow:
+    0 16px 48px var(--glass-shadow-hover),
+    inset 0 1px 0 var(--glass-highlight) !important;
+}
+
+/* 深色主题下 theme.scss 给这些卡片写了具体底色，需一并覆盖 */
+.dark .stat-card,
+.dark .order-card,
+.dark .cart-item,
+.dark .coupon-card,
+.dark .product-card,
+.dark .section-card,
+.dark .chart-card,
+.dark .order-card .order-header,
+.dark .order-card .order-items,
+.dark .order-card .order-footer,
+.dark .cart-footer,
+.dark .order-confirm,
+.dark .order-confirm .confirm-item {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-base)) !important;
+  background-image: var(--glass-sheen-gradient);
+  border-color: var(--glass-border) !important;
+}
+
+.dark .product-image,
+.dark .order-card .order-items .item-image {
+  background-color: rgb(var(--glass-tint-rgb) / var(--glass-alpha-veil)) !important;
+}
+
+/* ==========================================================================
+ *  8. 响应式：模糊半径按屏幕尺寸缩放
+ *
+ *  小屏设备（尤其手机）GPU 更吃力，而 backdrop-filter 的开销与
+ *  「模糊半径 × 采样面积」正相关。缩小小屏的半径既省算力，
+ *  也避免大半径把窄屏内容糊成一片、反而看不清层次。
+ *  只改缩放系数，用户自己设的 --glass-blur 仍然完整保留。
+ * ========================================================================== */
+
+@media (max-width: 1200px) {
+  :root {
+    --glass-blur-scale: 0.9;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --glass-blur-scale: 0.75;
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --glass-blur-scale: 0.62;
+  }
+}
+
+/* 极窄屏下顶栏/侧栏的圆角与阴影收敛，避免视觉过重 */
+@media (max-width: 480px) {
+  .el-dialog,
+  .el-message-box {
+    border-radius: var(--glass-radius-md) !important;
+  }
+}
+
+/* ==========================================================================
+ *  9. 降级与无障碍
+ * ========================================================================== */
+
+/* 用户系统设置「减少动态效果」：关掉位移与长过渡，只保留颜色变化 */
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface,
+  .glass,
+  .glass-card,
+  .glass-solid,
+  .glass-strong,
+  .glass-light,
+  .glass-interactive,
+  .glass-transition {
+    transition-duration: 0.01ms !important;
+  }
+
+  .glass-interactive:hover,
+  .glass-hover:hover,
+  .glass-card:hover,
+  .glass-interactive:active,
+  .glass-hover:active,
+  .glass-card:active {
+    transform: none;
+  }
+}
+
+/* 触摸设备：去掉悬停位移（触屏没有真正的 hover，位移会造成"粘手"错觉） */
+@media (hover: none) {
+  :root {
+    --glass-hover-lift: none;
+    --glass-hover-lift-card: none;
+  }
+}
+
+/* 浏览器不支持 backdrop-filter 时：退回较高不透明度，保证内容可读 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-alpha: 0.88;
+    --glass-frost: 0.02;
+  }
+
+  .glass-surface,
+  .glass,
+  .glass-card,
+  .glass-solid,
+  .glass-strong,
+  .glass-light {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* JS 探测到「用户已关闭毛玻璃」或「低端设备降级」时，给 <html> 加 .glass-off */
+.glass-off {
+  --glass-alpha: 0.94;
+  --glass-blur: 0;
+  --glass-frost: 0;
+}
+
+.glass-off .glass-surface,
+.glass-off .glass,
+.glass-off .glass-card,
+.glass-off .glass-solid,
+.glass-off .glass-strong,
+.glass-off .glass-light,
+.glass-off .sidebar,
+.glass-off .header,
+.glass-off .main-content,
+.glass-off .el-dialog,
+.glass-off .el-message-box {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-image: none;
+}
