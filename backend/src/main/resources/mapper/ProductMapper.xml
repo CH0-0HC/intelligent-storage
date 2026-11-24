@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" 
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ai.smartinventory.mapper.ProductMapper">
+    
+    <select id="selectHotProducts" resultType="com.ai.smartinventory.entity.Product">
+        SELECT * FROM product
+        WHERE deleted = 0 
+        AND status = 1
+        AND is_hot = 1
+        ORDER BY sales DESC
+        LIMIT #{limit}
+    </select>
+    
+    <select id="selectRecommendProducts" resultType="com.ai.smartinventory.entity.Product">
+        SELECT * FROM product
+        WHERE deleted = 0 
+        AND status = 1
+        AND is_recommend = 1
+        ORDER BY create_time DESC
+        LIMIT #{limit}
+    </select>
+    
+    <!-- selectProductsByCategory 已删除：接口与实现俱在，但全项目无调用方，
+         实际按分类取商品走的是 ProductServiceImpl 的 LambdaQueryWrapper。 -->
+    
+    <select id="selectTopProducts" resultType="com.ai.smartinventory.entity.Product">
+        SELECT * FROM product
+        WHERE deleted = 0 
+        AND status = 1
+        <!-- 租户隔离（2026-09-22 补全）：merchantId 为 null 时不拼条件（管理员全局视图） -->
+        <if test="merchantId != null">
+            AND merchant_id = #{merchantId}
+        </if>
+        ORDER BY sales DESC
+        LIMIT #{limit}
+    </select>
+    
+</mapper>

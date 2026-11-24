@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" 
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ai.smartinventory.mapper.UserBehaviorMapper">
+    
+    <select id="selectByUserId" resultType="com.ai.smartinventory.entity.UserBehavior">
+        SELECT * FROM user_behavior
+        WHERE user_id = #{userId}
+        AND deleted = 0
+        ORDER BY create_time DESC
+    </select>
+    
+    <select id="selectRecentBehaviors" resultType="com.ai.smartinventory.entity.UserBehavior">
+        SELECT * FROM user_behavior
+        WHERE deleted = 0
+        AND create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY)
+        ORDER BY create_time DESC
+    </select>
+    
+</mapper>

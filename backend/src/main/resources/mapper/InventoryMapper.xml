@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" 
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ai.smartinventory.mapper.InventoryMapper">
+    <!--
+      租户隔离（2026-09-22 补全）
+      ===============================================================
+      这三条查询此前完全没有商户条件，配合已生效的 @SaCheckRole（商家确实是 merchant
+      角色）意味着：任何商家都能看到**全平台**库存、预警与出入库流水，并对他人的
+      productId 执行出入库。现统一加入 p.merchant_id 条件。
+
+      merchantId 为 null 时不拼接条件（管理员全局视图 / 公开路径），
+      与 common/MerchantContext.currentMerchantId() 的约定一致。
+
+      ⚠️ 本文件是 XML，注释体内**禁止出现连续两个 ASCII 连字符**（XML 规范明文规定）。
+      原先这里用了一长串连字符做分隔线，导致：
+        SAXParseException: 注释中不允许出现字符串（连续连字符）
+        => Failed to parse mapping resource: InventoryMapper.xml
+        => SqlSessionFactory 创建失败 => Spring 上下文整体启动失败（应用根本起不来）。
+      注意这条错误**编译期不报**，只在启动/上下文加载时爆，排查时极易走偏。
+      需要分隔线请用 "=" 或 "·" 之类的字符。写这条说明时也曾踩到同一个坑。
+    -->
+    
+    <select id="selectWarningInventories" resultType="com.ai.smartinventory.entity.Inventory">
+        SELECT i.*, p.name as product_name, p.image as product_image
+        FROM inventory i
+        LEFT JOIN product p ON i.product_id = p.id
+        WHERE i.deleted = 0 
+        AND (p.deleted = 0 OR p.deleted IS NULL)
+        AND i.quantity &lt;= i.warning_quantity
+        <if test="merchantId != null">
+            AND p.merchant_id = #{merchantId}
+        </if>
+        ORDER BY (i.warning_quantity - i.quantity) DESC
+    </select>
+    
+    <select id="selectInventoryPageWithProduct" resultType="com.ai.smartinventory.entity.Inventory">
+        SELECT i.*, p.name as product_name, p.image as product_image
+        FROM inventory i
+        LEFT JOIN product p ON i.product_id = p.id
+        WHERE i.deleted = 0
+        AND (p.deleted = 0 OR p.deleted IS NULL)
+        <if test="merchantId != null">
+            AND p.merchant_id = #{merchantId}
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND (p.name LIKE CONCAT('%', #{keyword}, '%') OR i.product_id = #{keyword})
+        </if>
+        ORDER BY i.create_time DESC
+        LIMIT #{offset}, #{size}
+    </select>
+    
+    <select id="selectInventoryPageCount" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM inventory i
+        LEFT JOIN product p ON i.product_id = p.id
+        WHERE i.deleted = 0
+        AND (p.deleted = 0 OR p.deleted IS NULL)
+        <if test="merchantId != null">
+            AND p.merchant_id = #{merchantId}
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND (p.name LIKE CONCAT('%', #{keyword}, '%') OR i.product_id = #{keyword})
+        </if>
+    </select>
+    
+    <!-- selectInventoryWithProduct 已删除：src/main 下零调用方的死代码 -->
+    
+</mapper>

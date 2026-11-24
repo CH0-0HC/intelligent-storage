@@ -1,0 +1,120 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+# ===== 文件上传 =====
+# path 建议使用绝对路径：相对路径跟随「进程工作目录」，从项目根启动与从 backend/ 启动
+# 会落到不同目录，导致已上传的文件互相读不到。
+# 本地开发默认 ./uploads（请统一从 backend/ 目录启动）；生产用 UPLOAD_PATH 指向独立数据目录。
+# legacy-paths 为可选的只读兜底挂载，用于兼容历史文件目录，留空即不启用。
+upload:
+  path: ${UPLOAD_PATH:./uploads}
+  access-prefix: /uploads
+  legacy-paths: ${UPLOAD_LEGACY_PATHS:}
+
+spring:
+  application:
+    name: smart-inventory
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/smart_inventory?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:root}
+    # 本地开发兜底值，仅为「clone 下来即可运行」，请勿用于生产。
+    # 生产 profile（application-prod.yml）对 DB_USERNAME / DB_PASSWORD 不提供默认值，
+    # 缺失即启动失败，避免带着弱口令静默运行。
+    password: ${DB_PASSWORD:12345678}
+  data:
+    # Redis 仅服务于 @RateLimit 限流。Redis 不可用时限流切面降级放行，不阻塞启动，
+    # 因此 Redis 属于可选依赖。
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      timeout: 10000ms
+      lettuce:
+        pool:
+          max-active: 200
+          max-wait: -1ms
+          max-idle: 10
+          min-idle: 0
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 20MB
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+    # 交由 MyBatis 自动选型（存在 slf4j 时使用 slf4j），SQL 日志由下方 logging.level 控制。
+    # 不使用 StdOutImpl：它会绕过日志框架、把完整结果集逐行打到控制台。
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+sa-token:
+  token-name: Authorization
+  timeout: 86400
+  active-timeout: -1
+  is-concurrent: true
+  is-share: false
+  token-style: uuid
+  is-log: false
+  # 登录时同时写入同名 Cookie 作为兜底，但关闭 JS 读取，防止 XSS 窃取会话。
+  cookie:
+    http-only: true
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+aliyun:
+  api:
+    key: ${ALIYUN_API_KEY:your-aliyun-api-key}
+    secret: ${ALIYUN_API_SECRET:your-aliyun-api-secret}
+    model: qwen-turbo
+
+# ===== AI 链路 =====
+# provider: auto（本地优先，不可用时降级云端）| local（仅本地）| cloud（仅云端）
+ai:
+  provider: ${AI_PROVIDER:auto}
+  local:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    model: ${OLLAMA_MODEL:qwen3.5:0.8b}
+    # 上下文长度不要盲目调大：超出显存时 Ollama 会静默回退到 CPU 混合推理，
+    # 外部表现只是「变慢」。调整后建议用 /api/ai/status 复核是否仍走 GPU。
+    num-ctx: 4096
+    num-predict: 1024
+    temperature: 0.7
+    timeout-seconds: 120
+
+# ===== 订单超时回收 =====
+# unpaid-timeout-minutes 同时决定后台取消口径与前端倒计时，改动后前后端一起生效。
+# enabled=false 可整体停用该任务（演示环境需要保留超时单时使用）。
+order:
+  timeout-cancel:
+    enabled: ${ORDER_TIMEOUT_CANCEL_ENABLED:true}
+    unpaid-timeout-minutes: ${ORDER_UNPAID_TIMEOUT_MINUTES:15}
+    scan-interval-ms: 60000
+    initial-delay-ms: 30000
+
+logging:
+  level:
+    com.ai.smartinventory: info
+    # 需要排查 SQL 时临时改为 debug
+    com.ai.smartinventory.mapper: info
+    org.springframework: info

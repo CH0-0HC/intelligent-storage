@@ -1,0 +1,70 @@
+# =============================================================================
+# 生产环境专用配置
+# =============================================================================
+# 启用方式（二选一）：
+#   java -jar smart-inventory-1.0.0.jar --spring.profiles.active=prod
+#   set SPRING_PROFILES_ACTIVE=prod   （Windows）
+#   export SPRING_PROFILES_ACTIVE=prod（Linux/macOS）
+#
+# 【本文件的核心原则】
+# 不提供任何「可用于生产的默认凭据」。
+# 背景：application.yml 里写的是 ${DB_PASSWORD:123456} —— 开发方便，
+# 但部署时若忘了设环境变量，应用会带着 123456 静默跑起来，没有任何提示。
+# 这里换个策略：必需项一律不给默认值，缺失就让 Spring 启动失败并明确报错，
+# 属于「快速失败」，比静默带弱口令运行安全得多。
+#
+# 必需环境变量：
+#   DB_URL              jdbc:mysql://<host>:3306/smart_inventory?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false
+#   DB_USERNAME         数据库账号
+#   DB_PASSWORD         数据库口令（务必非 123456）
+#   REDIS_HOST          Redis 地址（启用 @RateLimit 限流才必需）
+#   UPLOAD_PATH         上传目录绝对路径，例如 D:/smart-inventory-data/uploads
+#   CORS_ALLOWED_ORIGINS 允许的前端来源，逗号分隔，例如 https://erp.example.com
+#   ALIYUN_API_KEY / ALIYUN_API_SECRET  走云端 AI 才需要
+# =============================================================================
+
+spring:
+  datasource:
+    # 不加默认值：缺失即启动失败，避免连错库还以为一切正常
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+
+upload:
+  # 生产必须指向独立数据目录，不要放在源码树里（重新部署会覆盖）
+  path: ${UPLOAD_PATH}
+  # 历史遗留目录的只读兜底挂载（可选，逗号分隔绝对路径）。
+  # 留空即为不启用。正确做法是迁移合并，这里只是防止历史文件直接 404。
+  legacy-paths: ${UPLOAD_LEGACY_PATHS:}
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS}
+
+aliyun:
+  api:
+    key: ${ALIYUN_API_KEY:}
+    secret: ${ALIYUN_API_SECRET:}
+
+# 生产环境不对外暴露接口文档与调试入口
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+knife4j:
+  enable: false
+
+logging:
+  level:
+    com.ai.smartinventory: info
+    # 生产不要开 SQL 日志，需要排查时临时开到 debug
+    com.ai.smartinventory.mapper: info
+    org.springframework: warn
