@@ -17,8 +17,7 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
-    ports:
-      - "3306:3306"
+    # 安全加固：不映射 3306 到宿主机，数据库仅供栈内服务通过 mysql:3306 访问
     volumes:
       - mysql-data:/var/lib/mysql
       - ./backend/src/main/resources/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -32,8 +31,7 @@ services:
     image: redis:7-alpine
     container_name: is-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # 安全加固：不映射 6379 到宿主机，缓存仅供栈内服务通过 redis:6379 访问
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

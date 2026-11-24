@@ -34,6 +34,11 @@ const MYSQL_BIN = process.env.MYSQL_BIN || 'C:/Program Files/MySQL/MySQL Server 
 const DB_USER = process.env.DB_USERNAME || 'root'
 const DB_PASS = process.env.DB_PASSWORD || '123456'
 
+// 本机验证工具：允许免配置运行，但显式提示兜底口令，避免静默带弱口令连库
+if (!process.env.DB_PASSWORD) {
+  console.warn('[安全提示] 未设置 DB_PASSWORD，正在使用本地开发默认口令；仅限本机，请勿用于生产。')
+}
+
 const DDL_FILE = path.join(ROOT, 'backend/src/main/resources/db/after_sale_item.sql')
 
 /** after_sale 加列语句 —— 与 init.sql 第 22 节的列定义**逐字对齐** */

@@ -18,6 +18,7 @@ import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import jakarta.annotation.Resource;
+import org.springframework.beans.factory.annotation.Value;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -30,7 +31,26 @@ public class AuthController {
     
     @Resource
     private UserService userService;
-    
+
+    // 【P0-3 演示账号环境哨兵】prod profile 下禁止种子账号登录。
+    // 保留种子账号本身是为了本地演示与验证脚本夹具不失效，但生产环境即使口令正确也拒绝，
+    // 这样 init.sql 误执行到生产库也不会留下可用弱口令入口。
+    @Value("${spring.profiles.active:}")
+    private String activeProfile;
+
+    private static final java.util.Set<String> DEMO_ACCOUNTS =
+            java.util.Set.of("admin", "merchant", "user", "kefu");
+
+    /**
+     * P0-3 哨兵判定：prod profile 下，种子账号即使口令正确也必须拒绝。
+     * 用 contains 而非 equals，兼容 prod,xxx 这类多 profile 同时激活的写法。
+     * 抽成静态纯方法便于单元测试独立覆盖，不依赖 Sa-Token 上下文。
+     */
+    static boolean isDemoAccountBlocked(String username, String activeProfile) {
+        return activeProfile != null && activeProfile.contains("prod")
+                && username != null && DEMO_ACCOUNTS.contains(username);
+    }
+
     // 【安全修复】原 /auth/test 与 /auth/init 调试接口已移除。
     // 这两个接口位于公开白名单前缀 /api/auth/ 下，任何未登录者均可调用，
     // /auth/init 更会把 admin/merchant/user 三个账号的密码强制重置为弱口令，
@@ -53,7 +73,14 @@ public class AuthController {
         if (!userService.checkPassword(loginDTO.getPassword(), user.getPassword())) {
             return Result.error("用户名或密码错误");
         }
-        
+
+        // 【P0-3】prod profile 下口令正确也不放行种子账号。
+        // 放在口令校验之后：对外部始终返回同一句「用户名或密码错误」，不暴露演示账号名单。
+        if (isDemoAccountBlocked(loginDTO.getUsername(), activeProfile)) {
+            log.warn("生产环境拦截演示账号登录尝试: {}", loginDTO.getUsername());
+            return Result.error("用户名或密码错误");
+        }
+
         StpUtil.login(user.getId());
         String token = StpUtil.getTokenValue();
         

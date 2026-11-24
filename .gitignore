@@ -39,6 +39,9 @@ pnpm-debug.log*
 Thumbs.db
 desktop.ini
 
+# ===== 脚本生成的临时报告 =====
+scripts/connectivity-report.json
+
 # ===== 测试与覆盖率 =====
 coverage/
 **/coverage/

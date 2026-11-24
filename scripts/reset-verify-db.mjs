@@ -23,6 +23,11 @@ const MYSQL_BIN = process.env.MYSQL_BIN || 'C:/Program Files/MySQL/MySQL Server 
 const DB_USER = process.env.DB_USERNAME || 'root'
 const DB_PASS = process.env.DB_PASSWORD || '123456'
 
+// 本机验证工具：允许免配置运行，但显式提示兜底口令，避免静默带弱口令连库
+if (!process.env.DB_PASSWORD) {
+  console.warn('[安全提示] 未设置 DB_PASSWORD，正在使用本地开发默认口令；仅限本机，请勿用于生产。')
+}
+
 if (!fs.existsSync(SOURCE_SQL)) {
   console.error(`找不到权威建库脚本: ${SOURCE_SQL}`)
   process.exit(1)

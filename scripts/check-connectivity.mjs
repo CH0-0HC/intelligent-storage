@@ -54,6 +54,21 @@ const cfg = {
   },
 }
 
+// ---------- 兜底口令保护 ----------
+// 本地开发仍可免配置运行；但一旦 DB_HOST 指向非回环地址，必须显式提供口令，
+// 避免默认弱口令被静默用于连接远程/生产数据库。
+if (!process.env.DB_PASSWORD) {
+  const host = cfg.db.host
+  const isLoopback = /^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$/i.test(host)
+  if (!isLoopback) {
+    console.error(
+      `拒绝执行：DB_HOST=${host} 非本机地址，且未设置 DB_PASSWORD —— 禁止用默认弱口令连接远程数据库。`
+    )
+    process.exit(2)
+  }
+  console.warn('[安全提示] 未设置 DB_PASSWORD，正在使用本地开发默认口令；仅限本机，请勿用于生产。')
+}
+
 // ---------- 工具函数 ----------
 function tcpConnect(host, port, timeoutMs) {
   return new Promise((resolve) => {
