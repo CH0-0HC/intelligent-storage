@@ -57,10 +57,13 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node 20 并缓存 npm
+      # 必须 Node 22：jsdom 27 依赖的 undici 7 会调用 Node 内置 webidl 的
+      # markAsUncloneable，该实现在 Node 20 上不存在，vitest 一启动即报
+      # "webidl.util.markAsUncloneable is not a function" 并整体失败。
+      - name: 安装 Node 22 并缓存 npm
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           # 锁文件在 frontend/ 子目录，必须显式指定
           cache-dependency-path: frontend/package-lock.json
@@ -82,10 +85,10 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Node 20
+      - name: 安装 Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 校验 i18n 缺失键必须为 0
         # check-i18n-keys.mjs 只负责打印缺失键，自身始终 exit 0；

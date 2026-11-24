@@ -99,7 +99,7 @@ docker compose up -d --build
 
 ### 方式二：本地开发
 
-前置：JDK 17、Maven 3.9+、Node.js 20+、MySQL 8（Redis 可选）。
+前置：JDK 17、Maven 3.9+、Node.js 22 LTS（含 npm，见 `.nvmrc`）、MySQL 8（Redis 可选）。
 
 ```bash
 # 1) 初始化数据库（脚本内含建库语句，可直接整份执行）

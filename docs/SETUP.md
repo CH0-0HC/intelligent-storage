@@ -8,12 +8,14 @@
 | --- | --- | --- |
 | JDK | 17（Corretto / Temurin 均可） | 必需 |
 | Maven | 3.9+ | 必需 |
-| Node.js | 20+（含 npm） | 必需 |
+| Node.js | 22 LTS（含 npm，仓库根目录 `.nvmrc`） | 必需 |
 | MySQL | 8.0 | 必需 |
 | Redis | 7 | 可选（仅限流，缺失自动降级） |
 | Ollama | 任意版本 | 可选（本地 AI） |
 
 > 建议锁定 JDK 17：更高版本 JDK 可能使 Lombok 注解处理失效，编译报「找不到符号」。
+
+> 前端锁 Node 22：测试环境 jsdom 27 依赖的 undici 7 会调用 Node 内置 webidl 的 `markAsUncloneable`，该实现在 Node 20 上不存在，`npm test` 会直接以 `TypeError: webidl.util.markAsUncloneable is not a function` 整体失败（构建不受影响）。用 `nvm use` 读取仓库根目录 `.nvmrc` 即可切换。
 
 ## 2. 初始化数据库
 
