@@ -1,0 +1,54 @@
+# ===== 测试专用配置 =====
+# 为 @SpringBootTest 提供可启动的 Spring 上下文，不依赖本机 MySQL / Redis。
+# 数据库使用 H2 内存库（MySQL 兼容模式），不执行生产 DDL。
+spring:
+  application:
+    name: smart-inventory-test
+
+  # 排除 Redis / Cache 自动装配：单元与上下文测试不应强制依赖外部中间件
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.cache.CacheAutoConfiguration
+
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+
+  sql:
+    init:
+      # 不自动执行生产 DDL（含 MySQL 专有语法），上下文测试只需要数据源可用
+      mode: never
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+
+# 订单超时回收任务在测试环境关闭：H2 内存库未建表，常驻任务反复查询会刷异常日志，
+# 也会让上下文加载结论不可信。
+order:
+  timeout-cancel:
+    enabled: false
+    unpaid-timeout-minutes: 15
+    scan-interval-ms: 60000
+    initial-delay-ms: 30000
+
+sa-token:
+  token-name: Authorization
+  timeout: 86400
+  is-log: false
+
+logging:
+  level:
+    com.ai.smartinventory: info
+    org.springframework: warn
